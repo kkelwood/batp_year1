@@ -1,0 +1,371 @@
+---
+title: "Apple Tree Project"
+author: "Kelsey Elwood"
+date: "11/2/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setwd-and-options, eval = FALSE}
+# set working directory
+setwd("/Users/elwoodk/Google_Drive/Research/apple-tree-project/")
+options(stringsAsFactors = FALSE)
+```
+
+```{r load-libraries}
+library(REdaS) # to convert degrees to radians
+# library(ggplot2)
+library(ggmap) # for maps
+# library(RColorBrewer)
+library(dplyr) # for data manipulation (pipes)
+# library(lubridate)
+library(raster) # for using geotiffs
+library(rgdal) # for geotiffs
+library(sp) # for converting csv to spatial object
+library(RColorBrewer) # for plotting in monocolors
+library(sf)  # for vector work
+library(mapview) # for embedding images in leaflet map
+
+```
+
+# Load field data: "apples"
+```{r load-and-format-apple-data}
+apples <- read.csv("data/field-data-2017-clean.csv") %>% 
+    mutate(DATE = as.POSIXct(date, format = "%e/%m/%Y")) %>%  # reformat the "DATE" column as class 'date'
+    mutate(date_time2 = paste0(DATE, " ", time)) %>% 
+    mutate(DATE_POSIX = as.POSIXct(date_time2, format = "%Y-%m-%d %H:%M")) %>% 
+    mutate(DBH_cm = circumference/pi)
+
+```
+
+```{r convert-height-data}
+apples$rad_to_base <- deg2rad(abs(apples$degrees_base))
+apples$rad_to_top <- deg2rad(abs(apples$degrees_top))
+
+apples$height <- (tan(apples$rad_to_base)*apples$distance_from_tree) + (tan(apples$rad_to_top)*apples$distance_from_tree)
+
+apples$height[apples$height > 100] <- NA
+apples$height[apples$height < 0] <- NA
+
+```
+
+
+# Download photographs
+```{r download-photos-from-url, eval = FALSE}
+# # Create new dataframe with just photo url and tree id
+# photo_df <- as.data.frame(cbind(tree_id = apples$tree_id, 
+#                                 photo = apples$photo))
+# # Define missing value as NA:
+# photo_df[126, 2] <- NA
+# 
+# # Remove NA value
+# photo_df <- na.omit(photo_df)
+# 
+# # define the destination folder
+# dest_dir <- "/Users/elwoodk/Google_Drive/Research/apple-tree-project/data/data-photos/"
+# 
+# # Use for loop to cycle through and download all the URLs. Photos will be renamed based on the tree ID.
+# for(i in 1:nrow(photo_df)){ # Cycle through each row of photo_df. To get i to be the row number (which was critical for the code below), it was important to write the code as `i in 1:nrow(photo_df)
+#     download.file(url = photo_df[i,2], # Use the row of interest, column #2, to get URL
+#                   destfile = paste0(dest_dir, photo_df[i, 1]), # extract the name of the file from column 1
+#                   method = "auto", 
+#                   quiet = FALSE, # Give live updates
+#                   mode = "wb",
+#                   cacheOK = TRUE)
+#     print(paste("Completed", i, "of", nrow(photo_df))) # Give progress report
+# }
+# 
+# # check that files arrived in destination directory
+# photo_list <- list.files(path = dest_dir)
+# photo_list
+# 
+# # check that the number of files matches expectations
+# length(photo_list)
+
+```
+
+
+# Maps
+
+## Historical Map 
+
+```{r load-historical-map}
+# new tiff
+aerial_1938 <- raster("data/geo-files/historical_map.tif")
+plot(aerial_1938,
+     col = gray.colors(10))
+extent(aerial_1938)
+```
+
+```{r UNNECESSARY-convert-apples-to-spatial-object}
+# copy the apples data.frame to a new object called "apples_spatial"
+apples_spatial <- apples
+
+# defines the coordinate column locations as long = column 6, lat = column 5
+apple_coords <- apples[,c(6,5)] 
+
+# convert to spatial object
+apples_spatial <- SpatialPointsDataFrame(coords = apple_coords, # defines the coordinates
+                                         data = apples,
+                                         proj4string = crs(aerial_1938)) # defines the CRS to match that of the historical imagery.
+
+```
+
+```{r compare-crs-and-extents}
+# CRS
+crs(apples_spatial)
+crs(aerial_1938)
+
+# Extent
+extent(apples_spatial)
+extent(aerial_1938)
+
+```
+
+```{r map-historical-with-field-data-overlay}
+# check crs and extent of both objects
+plot(aerial_1938,
+     col = gray.colors(10),
+     main = "Aerial image from 1938 \nwith 2017 sampled trees",
+     legend = FALSE)
+points(x = apples$longitude, y = apples$latitude,
+       pch = 19,
+       cex = 0.5,
+       col = "darkred")
+```
+
+## Modern Map with sampled trees overlay
+
+```{r google-map-base}
+boulder_map12 <- get_map(location = "Boulder, Colorado",
+          source = "google",
+          maptype = "satellite", 
+          crop = FALSE,
+          zoom = 12)
+```
+
+This map looks good and seems to match the locations that we sampled. (CRS is good)
+```{r print-ggmap}
+m1 <- ggmap(boulder_map12) +
+    labs(title = "Apple Trees in Boulder, CO",
+         subtitle = "Fall 2017 BATP Field Season",
+         x = "Longitute",
+         y = "Latitude")
+
+m1 <- m1 + geom_point(data = apples, 
+                      aes(x = longitude, y = latitude),
+                      alpha = 0.5,
+                      color = "white",
+                      fill = "black",
+                      size = 1)
+m1 
+```
+
+
+# Interactive Map with photo pop-up
+```{r interactive-web-map}
+library(leaflet)
+library(exifr)
+library(stringr)
+library(RColorBrewer)
+library(readr)
+```
+
+```{r}
+content <- paste(sep = "
+",  
+  	"",  
+  	"Line 1",  
+  	"Line 2"  
+)
+
+test_image <- apples$photo[1[1]]
+```
+
+```{r interactive-map-with-names}
+x1 <- mean(apples$longitude)
+y1 <- mean(apples$latitude)
+# content <- apples$photo
+
+mapout <- leaflet(apples) %>%
+    addProviderTiles("Esri.WorldImagery") %>% 
+    setView(lng = x1, lat = y1, zoom = 11) %>% 
+    addCircleMarkers(~ longitude, ~ latitude,
+                     color = "white",
+                     opacity = 1, 
+                     weight = 0.5,
+                     popup = as.character(apples$tree_id),
+                     fillOpacity = 0.5,
+                     radius = 3)
+
+    
+# With images
+map_imagepopup <- leaflet() %>%
+    addProviderTiles("Esri.WorldImagery") %>% 
+    setView(lng = x1, lat = y1, zoom = 11) %>% 
+    addCircleMarkers(data = apples, lng = ~longitude, lat = ~latitude,
+                     color = "white",
+                     opacity = 1, 
+                     weight = 0.5,
+                     popup = paste0("<img src = ", apples$photo, ">"),
+                     fillOpacity = 0.5,
+                     radius = 3) %>% 
+    popupOptions(maxHeight = 50)
+
+# With images, but popups in separate function
+map_imagepopup2 <- leaflet() %>%
+    addProviderTiles("Esri.WorldImagery") %>% 
+    setView(lng = x1, lat = y1, zoom = 11) %>% 
+    addCircleMarkers(data = apples, lng = ~longitude, lat = ~latitude,
+                     color = "white",
+                     opacity = 1, 
+                     weight = 0.5,                     fillOpacity = 0.5,
+                     radius = 3) 
+
+addPopups(map = map_imagepopup2,
+          lng = apples$longitude, 
+          lat = apples$latitude, 
+          popup = paste0("<img src = ", apples$photo, ">"),
+          options = popupOptions(maxWidth = 5))
+  
+# Leaflet options
+leaflet_options <- leafletOptions()
+
+# Leftover code
+    addMarkers(apples$longitude, apples$latitude,
+               popup = apples$photo,
+           options = markerOptions(opacity = 0.9, 
+                                   draggable = TRUE))
+
+mapout
+```
+
+```{r}
+test <- apples[1,]
+test_map <- leaflet() %>% 
+    addTiles %>% 
+    addCircleMarkers(data = apples, lng = ~longitude, lat = ~latitude, 
+                     popup = paste0("<img src = ", apples$photo, ">"))
+```
+
+
+# Phenology
+
+```{r clean-phenology-data}
+apples_pheno_cats <- c("Almost all leaves green",
+                       "Most leaves green, some yellow or red",
+                       "Most leaves yellow or red, some leaves green",
+                       "Almost all leaves yellow or red",
+                       "Very few to no leaves on tree")
+
+apples$phenology <- as.factor(apples$phenology)
+apples$phenology <- factor(apples$phenology,
+                               ordered = TRUE,
+                               levels = apples_pheno_cats)
+
+apples_pheno_list <- apples$phenology
+
+plot(apples$phenology)
+```
+
+```{r}
+pheno_hist <- ggplot(data.frame(apples),
+                     aes(x=phenology),
+                     labs(xlab = "Phenological Stage"))
+
+# counts
+pheno_hist + geom_histogram(stat = "count")
+
+```
+
+```{r}
+pheno_table <- apples %>%
+    group_by(phenology) %>% 
+    summarise(
+        avg_date = mean(DATE),
+        min_date = min(DATE),
+        max_date = max(DATE)
+    )
+
+```
+
+# Height
+
+```{r}
+hist(apples$height)
+min(apples$height, na.rm = TRUE)
+max(apples$height, na.rm = TRUE)
+```
+
+```{r}
+plot(x = apples$longitude, 
+     y = apples$latitude,
+     cex = (apples$DBH/50))
+```
+
+```{r}
+# apples %>%
+#     ggplot(aes(x = DATE, y = DAILY_PRECIP)) +
+#         geom_bar(stat = "identity", fill = "darkorchid4") +
+#         labs(subtitle = "b) Aug. 15 - Oct. 15, 2013",
+#              y = "Daily precipitation (inches)",
+#              x = "Date") + 
+#         scale_x_date(date_labels = "%b %d", date_breaks = "1 week") +
+#         theme_bw(base_size = 12)
+```
+
+# Map with height/phenology data
+
+
+```{r, cache = TRUE}
+boulder_map12 <- get_map(location = "Boulder, Colorado",
+          source = "stamen",
+          maptype = "terrain", 
+          crop = FALSE,
+          zoom = 12)
+
+myColors <- brewer.pal(5,"Set1")
+names(myColors) <- levels(apples$phenology)
+colScale <- scale_colour_manual(name = "Phenology",values = myColors)
+
+reclass_v <- c("Almost all leaves green", "green"
+               "Most leaves green, some yellow or red", "olivedrab1"
+               "Most leaves yellow or red, some leaves green",
+               "Almost all leaves yellow or red",
+               "Very few to no leaves on tree")
+   
+
+# Convert the vector `reclass_v` into a matrix with 3 columns.
+reclass_m <- matrix(reclass_v,
+                    ncol = 2, 
+                    byrow = TRUE)
+
+# Use the `reclassify` function to define a new raster that converts the elevation values into the classes as defined in `reclass_m`.
+apples_pheno_classified$PhenoColor <- reclassify(apples$phenology, reclass_m)
+
+map1 <- ggmap(boulder_map12) +
+    labs(subtitle = "Map of apple trees in Boulder, CO",
+         x = "Longitute",
+         y = "Latitude") +
+    geom_point(data = apples,
+               aes(x = long_4_Location,
+                   y = lat_4_Location,
+                   fill = phenology,
+                   alpha = 0.2),
+               size = apples$DBH/30,
+               shape = 19) +
+    guides(fill=FALSE,
+           alpha=FALSE,
+           size=FALSE) +
+    colScale
+map1 
+
++ scale_fill_manual(
+values = c("skyblue", "royalblue", "blue", "navy"),
+limits = c("d", "e", "p", "r"), breaks =c("d", "e", "p", "r"),
+name = "fuel", labels = c("D", "E", "P", "R"))
+```
+

@@ -1,0 +1,145 @@
+---
+title: "Interactive Maps"
+author: "Kelsey Elwood"
+date: "1/8/2018"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+# knitr::opts_chunk$set(echo = TRUE, root.dir = "~/Google_Drive/Research/apple-tree-project/BATP/")
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+options(stringsAsFactors = FALSE)
+
+```
+
+```{r setwd-and-options, eval = FALSE}
+# set working directory
+setwd("/Users/elwoodk/Google_Drive/Research/apple-tree-project/BATP/")
+```
+
+```{r load-libraries}
+library(REdaS) # to convert degrees to radians
+# library(ggplot2)
+library(ggmap) # for maps
+# library(RColorBrewer)
+library(dplyr) # for data manipulation (pipes)
+# library(lubridate)
+library(raster) # for using geotiffs
+library(rgdal) # for geotiffs
+library(sp) # for converting csv to spatial object
+library(RColorBrewer) # for plotting in monocolors
+library(sf)  # for vector work
+library(mapview) # for embedding images in leaflet map
+library(leaflet)
+library(exifr)
+# library(stringr)
+library(RColorBrewer)
+library(tidyr)
+```
+
+# Load field data: "apples"
+```{r load-and-format-apple-data}
+apples <- read.csv("data/field-data-2017-clean.csv") %>% 
+    mutate(DATE = as.POSIXct(date, format = "%e/%m/%Y")) %>%  # reformat the "DATE" column as class 'date'
+    mutate(date_time2 = paste0(DATE, " ", time)) %>% 
+    mutate(DATE_POSIX = as.POSIXct(date_time2, format = "%Y-%m-%d %H:%M")) %>% 
+    mutate(DBH_cm = circumference/pi)
+
+apples <- apples[complete.cases(apples[ , "latitude"]),]
+```
+
+```{r convert-height-data}
+apples$rad_to_base <- deg2rad(abs(apples$degrees_base))
+apples$rad_to_top <- deg2rad(abs(apples$degrees_top))
+
+apples$height <- (tan(apples$rad_to_base)*apples$distance_from_tree) + (tan(apples$rad_to_top)*apples$distance_from_tree)
+
+apples$height[apples$height > 100] <- NA
+apples$height[apples$height < 0] <- NA
+
+```
+
+# Interactive map with text only
+```{r interactive-map-with-text-only}
+x1 <- mean(apples$longitude)
+y1 <- mean(apples$latitude)
+
+# With tree ID labels
+map_treeid <- leaflet(apples) %>%
+    addProviderTiles("Esri.WorldImagery") %>% 
+    setView(lng = x1, lat = y1, zoom = 11) %>% 
+    addCircleMarkers(~ longitude, ~ latitude,
+                     color = "darkred",
+                     opacity = 1, 
+                     weight = 0.5,
+                     popup = paste0("Tree ID: ", as.character(apples$tree_id), "; ",
+                                   "DBH: ", round(apples$DBH_cm, digits = 0), " cm; ",
+                                   "Height: ", round(apples$height, digits = 0), " m"),
+                     fillOpacity = 0.5,
+                     radius = apples$DBH_cm/5)
+
+map_treeid
+
+```
+
+# Set parameters for popup
+```{r popup-parameters}
+# Set parameters
+
+# Apple fruit icon
+icon_url <- "https://upload.wikimedia.org/wikipedia/commons/5/58/Apple_green.png"
+apple_icon <- makeIcon(icon_url, icon_url, 20, 20)
+
+# Text popup
+text_popup <- paste0("<b>Tree ID: </b>", as.character(apples$tree_id),
+                                   "<br/><b>DBH: </b>", round(apples$DBH_cm, digits = 0), " cm",
+                                   "<br/><b>Height: </b>", round(apples$height, digits = 0), " m")
+head(text_popup)
+
+# Image popup
+image_height <- 150
+image_width <- 150
+
+image_popup <- paste0("<img src = ", apples$photo, " height = ", image_height, " width = ", image_width, ">")
+# image_popup <- paste0("../data/tree-photos/", apples$tree_id, ".jpg")
+head(image_popup)
+
+image_popup_width_only <- paste0("<img src = ", apples$photo, " width = ", image_width, ">")
+
+image_popup_heightonly <- paste0("<img src = ", apples$photo, " height = ", image_height, ">")
+
+
+# Text + Image popup
+popup_content <- paste(image_popup_width_only, "<figcaption>", text_popup, "</figcaption>")
+# popup_content <- paste(image_popup, "<figcaption>", text_popup, "</figcaption>")
+head(popup_content)
+```
+
+```{r interactive-map-with-apple-icon}
+# Interactive Map with apple icon
+map_image_captions <- leaflet(apples) %>%
+    addProviderTiles("Esri.WorldImagery") %>% 
+    setView(lng = x1, lat = y1, zoom = 11) %>% 
+    addMarkers(~ longitude, ~ latitude,
+                     icon = apple_icon,
+                     popup = popup_content)
+
+map_image_captions
+```
+
+```{r interactive-map-with-white-dots}
+# Interactive map with white dots
+map_imagepopup <- leaflet() %>%
+    addProviderTiles("Esri.WorldImagery") %>% 
+    setView(lng = x1, lat = y1, zoom = 12) %>% 
+    addCircleMarkers(data = apples, lng = ~longitude, lat = ~latitude,
+                     color = "darkred",
+                     opacity = 1, 
+                     weight = 0.5,
+                     popup = popup_content,
+                     fillOpacity = 0.5,
+                     radius = apples$circumference/10) 
+map_imagepopup
+```
+
